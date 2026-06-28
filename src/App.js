@@ -1,11 +1,10 @@
 import { MapContainer, TileLayer, Marker, Popup } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { db } from "./firebase";
 import { collection, addDoc, getDocs, serverTimestamp, doc, updateDoc, increment } from "firebase/firestore";
 
-// Fix leaflet marker icon issue
 delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
   iconRetinaUrl: require('leaflet/dist/images/marker-icon-2x.png'),
@@ -14,29 +13,27 @@ L.Icon.Default.mergeOptions({
 });
 
 function App() {
-  useEffect(() => {
-    loadIssues();
-  }, []);
   const [image, setImage] = useState(null);
   const [imageBase64, setImageBase64] = useState(null);
+  const [imagePreview, setImagePreview] = useState(null);
   const [location, setLocation] = useState("");
   const [description, setDescription] = useState("");
   const [loading, setLoading] = useState(false);
   const [issues, setIssues] = useState([]);
   const [aiResult, setAiResult] = useState(null);
+  const [activeTab, setActiveTab] = useState("report");
+  const fileRef = useRef();
 
-  const getLocation = () => {
-    return new Promise((resolve) => {
-      if (navigator.geolocation) {
-        navigator.geolocation.getCurrentPosition(
+  useEffect(() => { loadIssues(); }, []);
+
+  const getLocation = () => new Promise((resolve) => {
+    navigator.geolocation
+      ? navigator.geolocation.getCurrentPosition(
           (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
-          () => resolve({ lat: 20.5937, lng: 78.9629 }) // default India center
-        );
-      } else {
-        resolve({ lat: 20.5937, lng: 78.9629 });
-      }
-    });
-  };
+          () => resolve({ lat: 20.5937, lng: 78.9629 })
+        )
+      : resolve({ lat: 20.5937, lng: 78.9629 });
+  });
 
   const handleImageChange = (e) => {
     const file = e.target.files[0];
@@ -45,6 +42,7 @@ function App() {
     const reader = new FileReader();
     reader.onloadend = () => {
       setImageBase64(reader.result.split(",")[1]);
+      setImagePreview(reader.result);
     };
     reader.readAsDataURL(file);
   };
@@ -56,18 +54,17 @@ function App() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          contents: [{
-            parts: [
-              { text: `You are an AI that analyzes community issues. Analyze this image and the description: "${description}". Return ONLY a JSON object with these fields: category (one of: Pothole, Water Leakage, Broken Streetlight, Garbage, Other), severity (one of: Low, Medium, High), summary (one sentence description). No markdown, just raw JSON.` },
-              { inline_data: { mime_type: "image/jpeg", data: imageBase64 } }
-            ]
-          }]
+          contents: [{ parts: [
+            { text: `Analyze this community issue image. Description: "${description}". Return ONLY raw JSON: {"category": "Pothole|Water Leakage|Broken Streetlight|Garbage|Other", "severity": "Low|Medium|High", "summary": "one sentence"}` },
+            { inline_data: { mime_type: "image/jpeg", data: imageBase64 } }
+          ]}]
         }),
       }
     );
     const data = await response.json();
+    if (!data.candidates) throw new Error(data.error?.message || "Gemini error");
     const text = data.candidates[0].content.parts[0].text;
-    return JSON.parse(text);
+    return JSON.parse(text.replace(/```json|```/g, "").trim());
   };
 
   const handleSubmit = async () => {
@@ -78,35 +75,25 @@ function App() {
       setAiResult(result);
       const coords = await getLocation();
       await addDoc(collection(db, "issues"), {
-        location,
-        description,
-        category: result.category,
-        severity: result.severity,
-        summary: result.summary,
-        votes: 0,
-        status: "Reported",
-        lat: coords.lat,
-        lng: coords.lng,
+        location, description,
+        category: result.category, severity: result.severity, summary: result.summary,
+        votes: 0, status: "Reported",
+        lat: coords.lat, lng: coords.lng,
         timestamp: serverTimestamp(),
       });
       alert("Issue reported successfully!");
-      setLocation("");
-      setDescription("");
-      setImage(null);
-      setImageBase64(null);
+      setLocation(""); setDescription(""); setImage(null); setImageBase64(null); setImagePreview(null);
       loadIssues();
-    } catch (err) {
-      console.error(err);
-      alert("Error: " + err.message);
-    }
+      setActiveTab("feed");
+    } catch (err) { alert("Error: " + err.message); }
     setLoading(false);
   };
 
   const loadIssues = async () => {
     const snapshot = await getDocs(collection(db, "issues"));
-    const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-    setIssues(data);
+    setIssues(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
   };
+
   const handleUpvote = async (issueId) => {
     const issueRef = doc(db, "issues", issueId);
     await updateDoc(issueRef, { votes: increment(1) });
@@ -120,19 +107,9 @@ function App() {
   const checkEscalation = async (issueId, votes, issue) => {
     if (votes >= 3 && issue.status === "Reported") {
       const letter = await generateEscalationLetter(issue);
-      const issueRef = doc(db, "issues", issueId);
-      await updateDoc(issueRef, {
-        status: "Escalated",
-        escalationLetter: letter
-      });
+      await updateDoc(doc(db, "issues", issueId), { status: "Escalated", escalationLetter: letter });
       loadIssues();
     }
-  };
-
-  const handleResolve = async (issueId) => {
-    const issueRef = doc(db, "issues", issueId);
-    await updateDoc(issueRef, { status: "Resolved" });
-    loadIssues();
   };
 
   const generateEscalationLetter = async (issue) => {
@@ -142,9 +119,7 @@ function App() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          contents: [{
-            parts: [{ text: `Write a formal complaint letter to the Municipal Corporation about this community issue: Category: ${issue.category}, Location: ${issue.location}, Description: ${issue.summary}, Severity: ${issue.severity}, Reported by ${issue.votes} citizens. Keep it under 150 words, professional tone.` }]
-          }]
+          contents: [{ parts: [{ text: `Write a formal complaint letter to the Municipal Corporation about: Category: ${issue.category}, Location: ${issue.location}, Issue: ${issue.summary}, Severity: ${issue.severity}, Reported by ${issue.votes} citizens. Under 150 words, professional tone.` }] }]
         }),
       }
     );
@@ -152,150 +127,196 @@ function App() {
     return data.candidates[0].content.parts[0].text;
   };
 
+  const handleResolve = async (issueId) => {
+    await updateDoc(doc(db, "issues", issueId), { status: "Resolved" });
+    loadIssues();
+  };
+
   const severityColor = (s) => s === "High" ? "bg-red-500" : s === "Medium" ? "bg-yellow-500" : "bg-green-500";
+  const statusColor = (s) => s === "Escalated" ? "text-red-400" : s === "Resolved" ? "text-green-400" : "text-gray-400";
+  const statusIcon = (s) => s === "Escalated" ? "🚨" : s === "Resolved" ? "✅" : "📋";
 
   return (
     <div className="min-h-screen bg-gray-950 text-white">
       {/* Header */}
-      <div className="bg-gray-900 p-4 border-b border-gray-800">
-        <h1 className="text-2xl font-bold text-blue-400">FixIt 🛠️</h1>
-        <p className="text-gray-400 text-sm">AI-powered community issue reporting</p>
+      <div className="bg-gray-900 border-b border-gray-800 px-6 py-4 flex items-center justify-between sticky top-0 z-50">
+        <div className="flex items-center gap-3">
+          <div className="bg-blue-600 p-2 rounded-lg">
+            <span className="text-xl">🛠️</span>
+          </div>
+          <div>
+            <h1 className="text-xl font-bold text-white">FixIt</h1>
+            <p className="text-gray-400 text-xs">AI-powered civic reporting</p>
+          </div>
+        </div>
+        <div className="flex gap-2">
+          <span className="bg-blue-900 text-blue-300 text-xs px-3 py-1 rounded-full">Gemini AI</span>
+          <span className="bg-green-900 text-green-300 text-xs px-3 py-1 rounded-full">Live</span>
+        </div>
       </div>
 
-      {/* Dashboard Stats */}
-      <div className="grid grid-cols-3 gap-3 mb-6">
-        <div className="bg-gray-900 rounded-xl p-4 border border-gray-800 text-center">
-          <p className="text-2xl font-bold text-blue-400">{issues.length}</p>
-          <p className="text-gray-400 text-xs mt-1">Total Issues</p>
-        </div>
-        <div className="bg-gray-900 rounded-xl p-4 border border-gray-800 text-center">
-          <p className="text-2xl font-bold text-red-400">{issues.filter(i => i.status === "Escalated").length}</p>
-          <p className="text-gray-400 text-xs mt-1">Escalated</p>
-        </div>
-        <div className="bg-gray-900 rounded-xl p-4 border border-gray-800 text-center">
-          <p className="text-2xl font-bold text-green-400">{issues.filter(i => i.status === "Resolved").length}</p>
-          <p className="text-gray-400 text-xs mt-1">Resolved</p>
-        </div>
+      {/* Stats */}
+      <div className="grid grid-cols-3 gap-px bg-gray-800 border-b border-gray-800">
+        {[
+          { label: "Total Issues", value: issues.length, color: "text-blue-400" },
+          { label: "Escalated", value: issues.filter(i => i.status === "Escalated").length, color: "text-red-400" },
+          { label: "Resolved", value: issues.filter(i => i.status === "Resolved").length, color: "text-green-400" },
+        ].map(stat => (
+          <div key={stat.label} className="bg-gray-950 py-4 text-center">
+            <p className={`text-3xl font-bold ${stat.color}`}>{stat.value}</p>
+            <p className="text-gray-500 text-xs mt-1">{stat.label}</p>
+          </div>
+        ))}
       </div>
 
       {/* Map */}
-      <div className="max-w-2xl mx-auto px-4 mb-6">
-        <div className="rounded-xl overflow-hidden border border-gray-800" style={{height: '300px'}}>
-          <MapContainer center={[12.8399, 77.6770]} zoom={20} style={{height: '100%', width: '100%'}}>
-            <TileLayer
-              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-              attribution='&copy; OpenStreetMap contributors'
-            />
-            {issues.map(issue => (
-              issue.lat && issue.lng && (
-                <Marker key={issue.id} position={[issue.lat, issue.lng]}>
-                  <Popup>
+      <div className="h-56 border-b border-gray-800">
+        <MapContainer center={[20.5937, 78.9629]} zoom={5} style={{ height: '100%', width: '100%' }} zoomControl={false}>
+          <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+          {issues.map(issue => (
+            issue.lat && issue.lng && (
+              <Marker key={issue.id} position={[issue.lat, issue.lng]}>
+                <Popup>
+                  <div style={{minWidth: '150px'}}>
                     <b>{issue.category}</b><br/>
-                    {issue.location}<br/>
-                    Severity: {issue.severity}
-                  </Popup>
-                </Marker>
-              )
-            ))}
-          </MapContainer>
-        </div>
+                    <span style={{color:'#666'}}>{issue.location}</span><br/>
+                    Severity: <b>{issue.severity}</b><br/>
+                    Status: {issue.status}
+                  </div>
+                </Popup>
+              </Marker>
+            )
+          ))}
+        </MapContainer>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex border-b border-gray-800 bg-gray-900 sticky top-16 z-40">
+        {["report", "feed"].map(tab => (
+          <button
+            key={tab}
+            onClick={() => setActiveTab(tab)}
+            className={`flex-1 py-3 text-sm font-semibold capitalize transition-colors ${activeTab === tab ? "text-blue-400 border-b-2 border-blue-400" : "text-gray-500 hover:text-gray-300"}`}
+          >
+            {tab === "report" ? "📸 Report Issue" : `📋 Issues Feed (${issues.length})`}
+          </button>
+        ))}
       </div>
 
       <div className="max-w-2xl mx-auto p-4">
-        {/* Report Form */}
-        <div className="bg-gray-900 rounded-xl p-6 mb-6 border border-gray-800">
-          <h2 className="text-lg font-semibold mb-4">Report an Issue</h2>
-          
-          <input
-            type="file"
-            accept="image/*"
-            onChange={handleImageChange}
-            className="w-full mb-3 text-sm text-gray-400"
-          />
-          {image && <p className="text-green-400 text-sm mb-3">✓ Image selected: {image.name}</p>}
-          
-          <input
-            type="text"
-            placeholder="Location (e.g. Near Gate 2, MG Road)"
-            value={location}
-            onChange={(e) => setLocation(e.target.value)}
-            className="w-full bg-gray-800 rounded-lg p-3 mb-3 text-white placeholder-gray-500 border border-gray-700"
-          />
-          
-          <textarea
-            placeholder="Describe the issue (optional)"
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            className="w-full bg-gray-800 rounded-lg p-3 mb-4 text-white placeholder-gray-500 border border-gray-700 h-24"
-          />
-          
-          <button
-            onClick={handleSubmit}
-            disabled={loading}
-            className="w-full bg-blue-600 hover:bg-blue-700 rounded-lg p-3 font-semibold disabled:opacity-50"
-          >
-            {loading ? "Analyzing with AI..." : "Report Issue"}
-          </button>
-        </div>
-
-        {/* AI Result */}
-        {aiResult && (
-          <div className="bg-gray-900 rounded-xl p-4 mb-6 border border-blue-800">
-            <h3 className="font-semibold text-blue-400 mb-2">AI Analysis</h3>
-            <p><span className="text-gray-400">Category:</span> {aiResult.category}</p>
-            <p><span className="text-gray-400">Severity:</span> {aiResult.severity}</p>
-            <p><span className="text-gray-400">Summary:</span> {aiResult.summary}</p>
-          </div>
-        )}
-
-        {/* Load Issues Button */}
-        <button
-          onClick={loadIssues}
-          className="w-full bg-gray-800 hover:bg-gray-700 rounded-lg p-3 mb-4 font-semibold"
-        >
-          Load Reported Issues
-        </button>
-
-        {/* Issues Feed */}
-        {issues.map(issue => (
-          <div key={issue.id} className="bg-gray-900 rounded-xl p-4 mb-3 border border-gray-800">
-            <div className="flex justify-between items-start mb-2">
-              <span className="font-semibold">{issue.category}</span>
-              <span className={`text-xs px-2 py-1 rounded-full text-white ${severityColor(issue.severity)}`}>
-                {issue.severity}
-              </span>
+        {/* Report Tab */}
+        {activeTab === "report" && (
+          <div>
+            {/* Image Upload */}
+            <div
+              onClick={() => fileRef.current.click()}
+              className="border-2 border-dashed border-gray-700 hover:border-blue-500 rounded-xl p-8 mb-4 text-center cursor-pointer transition-colors"
+            >
+              {imagePreview ? (
+                <img src={imagePreview} alt="preview" className="max-h-48 mx-auto rounded-lg object-cover" />
+              ) : (
+                <div>
+                  <p className="text-4xl mb-2">📷</p>
+                  <p className="text-gray-400">Click to upload photo of the issue</p>
+                  <p className="text-gray-600 text-xs mt-1">JPG, PNG supported</p>
+                </div>
+              )}
             </div>
-            <p className="text-gray-400 text-sm mb-1">📍 {issue.location}</p>
-            <p className="text-gray-300 text-sm">{issue.summary}</p>
-            <div className="flex justify-between items-center mt-2">
-              <p className={`text-xs font-semibold ${issue.status === "Escalated" ? "text-red-400" : "text-gray-500"}`}>
-                {issue.status === "Escalated" ? "🚨 Escalated" : `Status: ${issue.status}`}
-              </p>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => handleUpvote(issue.id)}
-                  className="text-xs bg-gray-800 hover:bg-gray-700 px-3 py-1 rounded-full"
-                >
-                  👍 {issue.votes} votes
-                </button>
-                {issue.status !== "Resolved" && (
-                  <button
-                    onClick={() => handleResolve(issue.id)}
-                    className="text-xs bg-green-800 hover:bg-green-700 px-3 py-1 rounded-full"
-                  >
-                    ✅ Resolve
-                  </button>
-                )}
-              </div>
-            </div>
-            {issue.escalationLetter && (
-              <div className="mt-3 p-3 bg-red-950 border border-red-800 rounded-lg">
-                <p className="text-red-400 text-xs font-semibold mb-1">📨 Auto-Generated Complaint Letter</p>
-                <p className="text-gray-300 text-xs">{issue.escalationLetter}</p>
+            <input ref={fileRef} type="file" accept="image/*" onChange={handleImageChange} className="hidden" />
+
+            <input
+              type="text"
+              placeholder="📍 Location (e.g. Near Gate 2, MG Road)"
+              value={location}
+              onChange={(e) => setLocation(e.target.value)}
+              className="w-full bg-gray-900 rounded-xl p-4 mb-3 text-white placeholder-gray-500 border border-gray-800 focus:border-blue-500 focus:outline-none"
+            />
+
+            <textarea
+              placeholder="Describe the issue (optional — AI will analyze the photo)"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              className="w-full bg-gray-900 rounded-xl p-4 mb-4 text-white placeholder-gray-500 border border-gray-800 focus:border-blue-500 focus:outline-none h-24 resize-none"
+            />
+
+            <button
+              onClick={handleSubmit}
+              disabled={loading}
+              className="w-full bg-blue-600 hover:bg-blue-700 active:bg-blue-800 rounded-xl p-4 font-bold text-lg disabled:opacity-40 transition-colors"
+            >
+              {loading ? "🤖 AI Analyzing..." : "🚀 Report Issue"}
+            </button>
+
+            {aiResult && (
+              <div className="mt-4 bg-blue-950 border border-blue-800 rounded-xl p-4">
+                <p className="text-blue-400 font-semibold mb-3">🤖 AI Analysis Complete</p>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="bg-gray-900 rounded-lg p-3">
+                    <p className="text-gray-400 text-xs">Category</p>
+                    <p className="font-semibold">{aiResult.category}</p>
+                  </div>
+                  <div className="bg-gray-900 rounded-lg p-3">
+                    <p className="text-gray-400 text-xs">Severity</p>
+                    <p className={`font-semibold ${aiResult.severity === 'High' ? 'text-red-400' : aiResult.severity === 'Medium' ? 'text-yellow-400' : 'text-green-400'}`}>{aiResult.severity}</p>
+                  </div>
+                </div>
+                <p className="text-gray-300 text-sm mt-3">{aiResult.summary}</p>
               </div>
             )}
           </div>
-        ))}
+        )}
+
+        {/* Feed Tab */}
+        {activeTab === "feed" && (
+          <div>
+            {issues.length === 0 ? (
+              <div className="text-center py-16 text-gray-500">
+                <p className="text-4xl mb-3">🏙️</p>
+                <p>No issues reported yet</p>
+              </div>
+            ) : (
+              issues.map(issue => (
+                <div key={issue.id} className="bg-gray-900 rounded-xl p-4 mb-3 border border-gray-800 hover:border-gray-700 transition-colors">
+                  <div className="flex justify-between items-start mb-2">
+                    <div>
+                      <span className="font-bold text-white">{issue.category}</span>
+                      <span className={`ml-2 text-xs ${statusColor(issue.status)}`}>
+                        {statusIcon(issue.status)} {issue.status}
+                      </span>
+                    </div>
+                    <span className={`text-xs px-2 py-1 rounded-full text-white font-semibold ${severityColor(issue.severity)}`}>
+                      {issue.severity}
+                    </span>
+                  </div>
+                  <p className="text-gray-400 text-sm mb-2">📍 {issue.location}</p>
+                  <p className="text-gray-300 text-sm mb-3">{issue.summary}</p>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => handleUpvote(issue.id)}
+                      className="flex-1 text-sm bg-gray-800 hover:bg-gray-700 py-2 rounded-lg font-semibold transition-colors"
+                    >
+                      👍 Verify ({issue.votes})
+                    </button>
+                    {issue.status !== "Resolved" && (
+                      <button
+                        onClick={() => handleResolve(issue.id)}
+                        className="flex-1 text-sm bg-green-900 hover:bg-green-800 py-2 rounded-lg font-semibold transition-colors text-green-300"
+                      >
+                        ✅ Mark Resolved
+                      </button>
+                    )}
+                  </div>
+                  {issue.escalationLetter && (
+                    <div className="mt-3 p-3 bg-red-950 border border-red-900 rounded-lg">
+                      <p className="text-red-400 text-xs font-bold mb-2">📨 AUTO-ESCALATED TO AUTHORITIES</p>
+                      <p className="text-gray-300 text-xs leading-relaxed">{issue.escalationLetter}</p>
+                    </div>
+                  )}
+                </div>
+              ))
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
