@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { db } from "./firebase";
-import { collection, addDoc, getDocs, serverTimestamp } from "firebase/firestore";
+import { collection, addDoc, getDocs, serverTimestamp, doc, updateDoc, increment } from "firebase/firestore";
 
 function App() {
   const [image, setImage] = useState(null);
@@ -77,6 +77,44 @@ function App() {
     const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
     setIssues(data);
   };
+  const handleUpvote = async (issueId) => {
+    const issueRef = doc(db, "issues", issueId);
+    await updateDoc(issueRef, { votes: increment(1) });
+    const snapshot = await getDocs(collection(db, "issues"));
+    const updated = snapshot.docs.find(d => d.id === issueId);
+    const updatedIssue = { id: updated.id, ...updated.data() };
+    await checkEscalation(issueId, updatedIssue.votes, updatedIssue);
+    loadIssues();
+  };
+
+  const checkEscalation = async (issueId, votes, issue) => {
+    if (votes >= 3 && issue.status === "Reported") {
+      const letter = await generateEscalationLetter(issue);
+      const issueRef = doc(db, "issues", issueId);
+      await updateDoc(issueRef, {
+        status: "Escalated",
+        escalationLetter: letter
+      });
+      loadIssues();
+    }
+  };
+
+const generateEscalationLetter = async (issue) => {
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.REACT_APP_GEMINI_API_KEY}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{
+          parts: [{ text: `Write a formal complaint letter to the Municipal Corporation about this community issue: Category: ${issue.category}, Location: ${issue.location}, Description: ${issue.summary}, Severity: ${issue.severity}, Reported by ${issue.votes} citizens. Keep it under 150 words, professional tone.` }]
+        }]
+      }),
+    }
+  );
+  const data = await response.json();
+  return data.candidates[0].content.parts[0].text;
+};
 
   const severityColor = (s) => s === "High" ? "bg-red-500" : s === "Medium" ? "bg-yellow-500" : "bg-green-500";
 
@@ -154,7 +192,23 @@ function App() {
             </div>
             <p className="text-gray-400 text-sm mb-1">📍 {issue.location}</p>
             <p className="text-gray-300 text-sm">{issue.summary}</p>
-            <p className="text-gray-500 text-xs mt-2">Status: {issue.status}</p>
+            <div className="flex justify-between items-center mt-2">
+              <p className={`text-xs font-semibold ${issue.status === "Escalated" ? "text-red-400" : "text-gray-500"}`}>
+                {issue.status === "Escalated" ? "🚨 Escalated" : `Status: ${issue.status}`}
+              </p>
+              <button
+                onClick={() => handleUpvote(issue.id)}
+                className="text-xs bg-gray-800 hover:bg-gray-700 px-3 py-1 rounded-full"
+              >
+                👍 {issue.votes} votes
+              </button>
+            </div>
+            {issue.escalationLetter && (
+              <div className="mt-3 p-3 bg-red-950 border border-red-800 rounded-lg">
+                <p className="text-red-400 text-xs font-semibold mb-1">📨 Auto-Generated Complaint Letter</p>
+                <p className="text-gray-300 text-xs">{issue.escalationLetter}</p>
+              </div>
+            )}
           </div>
         ))}
       </div>
