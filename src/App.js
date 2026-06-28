@@ -129,22 +129,28 @@ function App() {
     }
   };
 
-const generateEscalationLetter = async (issue) => {
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.REACT_APP_GEMINI_API_KEY}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{
-          parts: [{ text: `Write a formal complaint letter to the Municipal Corporation about this community issue: Category: ${issue.category}, Location: ${issue.location}, Description: ${issue.summary}, Severity: ${issue.severity}, Reported by ${issue.votes} citizens. Keep it under 150 words, professional tone.` }]
-        }]
-      }),
-    }
-  );
-  const data = await response.json();
-  return data.candidates[0].content.parts[0].text;
-};
+  const handleResolve = async (issueId) => {
+    const issueRef = doc(db, "issues", issueId);
+    await updateDoc(issueRef, { status: "Resolved" });
+    loadIssues();
+  };
+
+  const generateEscalationLetter = async (issue) => {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.REACT_APP_GEMINI_API_KEY}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{
+            parts: [{ text: `Write a formal complaint letter to the Municipal Corporation about this community issue: Category: ${issue.category}, Location: ${issue.location}, Description: ${issue.summary}, Severity: ${issue.severity}, Reported by ${issue.votes} citizens. Keep it under 150 words, professional tone.` }]
+          }]
+        }),
+      }
+    );
+    const data = await response.json();
+    return data.candidates[0].content.parts[0].text;
+  };
 
   const severityColor = (s) => s === "High" ? "bg-red-500" : s === "Medium" ? "bg-yellow-500" : "bg-green-500";
 
@@ -265,12 +271,22 @@ const generateEscalationLetter = async (issue) => {
               <p className={`text-xs font-semibold ${issue.status === "Escalated" ? "text-red-400" : "text-gray-500"}`}>
                 {issue.status === "Escalated" ? "🚨 Escalated" : `Status: ${issue.status}`}
               </p>
-              <button
-                onClick={() => handleUpvote(issue.id)}
-                className="text-xs bg-gray-800 hover:bg-gray-700 px-3 py-1 rounded-full"
-              >
-                👍 {issue.votes} votes
-              </button>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => handleUpvote(issue.id)}
+                  className="text-xs bg-gray-800 hover:bg-gray-700 px-3 py-1 rounded-full"
+                >
+                  👍 {issue.votes} votes
+                </button>
+                {issue.status !== "Resolved" && (
+                  <button
+                    onClick={() => handleResolve(issue.id)}
+                    className="text-xs bg-green-800 hover:bg-green-700 px-3 py-1 rounded-full"
+                  >
+                    ✅ Resolve
+                  </button>
+                )}
+              </div>
             </div>
             {issue.escalationLetter && (
               <div className="mt-3 p-3 bg-red-950 border border-red-800 rounded-lg">
