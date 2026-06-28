@@ -55,7 +55,7 @@ function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           contents: [{ parts: [
-            { text: `Analyze this community issue image. Description: "${description}". Return ONLY raw JSON: {"category": "Pothole|Water Leakage|Broken Streetlight|Garbage|Other", "severity": "Low|Medium|High", "summary": "one sentence"}` },
+            { text: `You are an AI that analyzes community issue images. Analyze this image and description: "${description}". If the image shows a legitimate civic/community problem, return ONLY raw JSON: {"valid": true, "category": "Pothole|Water Leakage|Broken Streetlight|Garbage|Damaged Road|Fallen Tree|Flooding|Sewage Problem|Illegal Dumping|Broken Infrastructure", "severity": "Low|Medium|High", "summary": "one descriptive sentence"}. If the image does NOT show a community issue (e.g. selfie, food, random object), return ONLY: {"valid": false, "category": "", "severity": "", "summary": ""}. No markdown, just raw JSON.` },
             { inline_data: { mime_type: "image/jpeg", data: imageBase64 } }
           ]}]
         }),
@@ -67,27 +67,31 @@ function App() {
     return JSON.parse(text.replace(/```json|```/g, "").trim());
   };
 
-  const handleSubmit = async () => {
-    if (!imageBase64 || !location) return alert("Please add image and location");
-    setLoading(true);
-    try {
-      const result = await analyzeWithGemini();
-      setAiResult(result);
-      const coords = await getLocation();
-      await addDoc(collection(db, "issues"), {
-        location, description,
-        category: result.category, severity: result.severity, summary: result.summary,
-        votes: 0, status: "Reported",
-        lat: coords.lat, lng: coords.lng,
-        timestamp: serverTimestamp(),
-      });
-      alert("Issue reported successfully!");
-      setLocation(""); setDescription(""); setImage(null); setImageBase64(null); setImagePreview(null);
-      loadIssues();
-      setActiveTab("feed");
-    } catch (err) { alert("Error: " + err.message); }
-    setLoading(false);
-  };
+ const handleSubmit = async () => {
+  if (!imageBase64 || !location) return alert("Please add image and location");
+  setLoading(true);
+  try {
+    const result = await analyzeWithGemini();
+    if (!result.valid) {
+      setLoading(false);
+      return alert("⚠️ Please upload a photo of an actual community issue (pothole, garbage, broken infrastructure, etc.)");
+    }
+    setAiResult(result);
+    const coords = await getLocation();
+    await addDoc(collection(db, "issues"), {
+      location, description,
+      category: result.category, severity: result.severity, summary: result.summary,
+      votes: 0, status: "Reported",
+      lat: coords.lat, lng: coords.lng,
+      timestamp: serverTimestamp(),
+    });
+    alert("Issue reported successfully!");
+    setLocation(""); setDescription(""); setImage(null); setImageBase64(null); setImagePreview(null);
+    loadIssues();
+    setActiveTab("feed");
+  } catch (err) { alert("Error: " + err.message); }
+  setLoading(false);
+};
 
   const loadIssues = async () => {
     const snapshot = await getDocs(collection(db, "issues"));
@@ -139,26 +143,26 @@ function App() {
   return (
     <div className="min-h-screen bg-gray-950 text-white">
       {/* Header */}
-      <div className="bg-gray-900 border-b border-gray-800 px-6 py-4 flex items-center justify-between sticky top-0 z-50">
+      <div className="bg-gray-900 border-b border-orange-900 px-6 py-4 flex items-center justify-between sticky top-0 z-50">
         <div className="flex items-center gap-3">
-          <div className="bg-blue-600 p-2 rounded-lg">
+          <div className="bg-orange-500 p-2 rounded-lg">
             <span className="text-xl">🛠️</span>
           </div>
           <div>
             <h1 className="text-xl font-bold text-white">FixIt</h1>
-            <p className="text-gray-400 text-xs">AI-powered civic reporting</p>
+            <p className="text-orange-400 text-xs font-medium">Stop filing forms. Just show FixIt.</p>
           </div>
         </div>
         <div className="flex gap-2">
-          <span className="bg-blue-900 text-blue-300 text-xs px-3 py-1 rounded-full">Gemini AI</span>
-          <span className="bg-green-900 text-green-300 text-xs px-3 py-1 rounded-full">Live</span>
+          <span className="bg-orange-900 text-orange-300 text-xs px-3 py-1 rounded-full font-semibold">Gemini AI</span>
+          <span className="bg-green-900 text-green-300 text-xs px-3 py-1 rounded-full font-semibold">● Live</span>
         </div>
       </div>
 
       {/* Stats */}
       <div className="grid grid-cols-3 gap-px bg-gray-800 border-b border-gray-800">
         {[
-          { label: "Total Issues", value: issues.length, color: "text-blue-400" },
+          { label: "Total Issues", value: issues.length, color: "text-orange-400" },
           { label: "Escalated", value: issues.filter(i => i.status === "Escalated").length, color: "text-red-400" },
           { label: "Resolved", value: issues.filter(i => i.status === "Resolved").length, color: "text-green-400" },
         ].map(stat => (
@@ -196,7 +200,7 @@ function App() {
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
-            className={`flex-1 py-3 text-sm font-semibold capitalize transition-colors ${activeTab === tab ? "text-blue-400 border-b-2 border-blue-400" : "text-gray-500 hover:text-gray-300"}`}
+            className={`flex-1 py-3 text-sm font-semibold capitalize transition-colors ${activeTab === tab ? "text-orange-400 border-b-2 border-orange-400" : "text-gray-500 hover:text-gray-300"}`}
           >
             {tab === "report" ? "📸 Report Issue" : `📋 Issues Feed (${issues.length})`}
           </button>
@@ -210,7 +214,7 @@ function App() {
             {/* Image Upload */}
             <div
               onClick={() => fileRef.current.click()}
-              className="border-2 border-dashed border-gray-700 hover:border-blue-500 rounded-xl p-8 mb-4 text-center cursor-pointer transition-colors"
+              className="border-2 border-dashed border-gray-700 hover:border-orange-500 rounded-xl p-8 mb-4 text-center cursor-pointer transition-colors"
             >
               {imagePreview ? (
                 <img src={imagePreview} alt="preview" className="max-h-48 mx-auto rounded-lg object-cover" />
@@ -229,27 +233,27 @@ function App() {
               placeholder="📍 Location (e.g. Near Gate 2, MG Road)"
               value={location}
               onChange={(e) => setLocation(e.target.value)}
-              className="w-full bg-gray-900 rounded-xl p-4 mb-3 text-white placeholder-gray-500 border border-gray-800 focus:border-blue-500 focus:outline-none"
+              className="w-full bg-gray-900 rounded-xl p-4 mb-3 text-white placeholder-gray-500 border border-gray-800 focus:border-orange-500 focus:outline-none"
             />
 
             <textarea
               placeholder="Describe the issue (optional — AI will analyze the photo)"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              className="w-full bg-gray-900 rounded-xl p-4 mb-4 text-white placeholder-gray-500 border border-gray-800 focus:border-blue-500 focus:outline-none h-24 resize-none"
+              className="w-full bg-gray-900 rounded-xl p-4 mb-4 text-white placeholder-gray-500 border border-gray-800 focus:border-orange-500 focus:outline-none h-24 resize-none"
             />
 
             <button
               onClick={handleSubmit}
               disabled={loading}
-              className="w-full bg-blue-600 hover:bg-blue-700 active:bg-blue-800 rounded-xl p-4 font-bold text-lg disabled:opacity-40 transition-colors"
+              className="w-full bg-orange-500 hover:bg-orange-600 active:bg-orange-700 rounded-xl p-4 font-bold text-lg disabled:opacity-40 transition-colors"
             >
               {loading ? "🤖 AI Analyzing..." : "🚀 Report Issue"}
             </button>
 
             {aiResult && (
-              <div className="mt-4 bg-blue-950 border border-blue-800 rounded-xl p-4">
-                <p className="text-blue-400 font-semibold mb-3">🤖 AI Analysis Complete</p>
+              <div className="mt-4 bg-orange-950 border border-orange-800 rounded-xl p-4">
+                <p className="text-orange-400 font-semibold mb-3">🤖 AI Analysis Complete</p>
                 <div className="grid grid-cols-2 gap-3">
                   <div className="bg-gray-900 rounded-lg p-3">
                     <p className="text-gray-400 text-xs">Category</p>
