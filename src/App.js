@@ -13,7 +13,7 @@ L.Icon.Default.mergeOptions({
 });
 
 function App() {
-  const [image, setImage] = useState(null);
+  const [, setImage] = useState(null);
   const [imageBase64, setImageBase64] = useState(null);
   const [imagePreview, setImagePreview] = useState(null);
   const [location, setLocation] = useState("");
