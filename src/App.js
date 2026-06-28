@@ -1,8 +1,12 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { db } from "./firebase";
 import { collection, addDoc, getDocs, serverTimestamp, doc, updateDoc, increment } from "firebase/firestore";
 
+
 function App() {
+  useEffect(() => {
+    loadIssues();
+  }, []);
   const [image, setImage] = useState(null);
   const [imageBase64, setImageBase64] = useState(null);
   const [location, setLocation] = useState("");
@@ -124,6 +128,22 @@ const generateEscalationLetter = async (issue) => {
       <div className="bg-gray-900 p-4 border-b border-gray-800">
         <h1 className="text-2xl font-bold text-blue-400">FixIt 🛠️</h1>
         <p className="text-gray-400 text-sm">AI-powered community issue reporting</p>
+      </div>
+
+      {/* Dashboard Stats */}
+      <div className="grid grid-cols-3 gap-3 mb-6">
+        <div className="bg-gray-900 rounded-xl p-4 border border-gray-800 text-center">
+          <p className="text-2xl font-bold text-blue-400">{issues.length}</p>
+          <p className="text-gray-400 text-xs mt-1">Total Issues</p>
+        </div>
+        <div className="bg-gray-900 rounded-xl p-4 border border-gray-800 text-center">
+          <p className="text-2xl font-bold text-red-400">{issues.filter(i => i.status === "Escalated").length}</p>
+          <p className="text-gray-400 text-xs mt-1">Escalated</p>
+        </div>
+        <div className="bg-gray-900 rounded-xl p-4 border border-gray-800 text-center">
+          <p className="text-2xl font-bold text-green-400">{issues.filter(i => i.status === "Resolved").length}</p>
+          <p className="text-gray-400 text-xs mt-1">Resolved</p>
+        </div>
       </div>
 
       <div className="max-w-2xl mx-auto p-4">
