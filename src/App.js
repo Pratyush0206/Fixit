@@ -22,6 +22,8 @@ function App() {
   const [issues, setIssues] = useState([]);
   const [aiResult, setAiResult] = useState(null);
   const [activeTab, setActiveTab] = useState("report");
+  const [userName, setUserName] = useState("");
+  const [showNameModal, setShowNameModal] = useState(true);
   const fileRef = useRef();
 
   useEffect(() => { loadIssues(); }, []);
@@ -55,7 +57,7 @@ function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           contents: [{ parts: [
-            { text: `You are an AI that analyzes community issue images. Analyze this image and description: "${description}". If the image shows a legitimate civic/community problem, return ONLY raw JSON: {"valid": true, "category": "Pothole|Water Leakage|Broken Streetlight|Garbage|Damaged Road|Fallen Tree|Flooding|Sewage Problem|Illegal Dumping|Broken Infrastructure", "severity": "Low|Medium|High", "summary": "one descriptive sentence"}. If the image does NOT show a community issue (e.g. selfie, food, random object), return ONLY: {"valid": false, "category": "", "severity": "", "summary": ""}. No markdown, just raw JSON.` },
+            { text: `You are an AI that analyzes community issue images. Analyze this image and description: "${description}". If the image shows a legitimate civic/community problem, return ONLY raw JSON: {"valid": true, "category": "Pothole|Water Leakage|Broken Streetlight|Garbage|Damaged Road|Fallen Tree|Flooding|Sewage Problem|Illegal Dumping|Broken Infrastructure", "severity": "Low|Medium|High", "summary": "one descriptive sentence"}. Severity guidelines: High = immediate danger to life/safety. Medium = significant inconvenience affecting daily life. Low = minor issue, not urgent. If the image does NOT show a community issue (e.g. selfie, food, random object), return ONLY: {"valid": false, "category": "", "severity": "", "summary": ""}. No markdown, just raw JSON.` },
             { inline_data: { mime_type: "image/jpeg", data: imageBase64 } }
           ]}]
         }),
@@ -123,7 +125,7 @@ function App() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          contents: [{ parts: [{ text: `Write a formal complaint letter to the Municipal Corporation about: Category: ${issue.category}, Location: ${issue.location}, Issue: ${issue.summary}, Severity: ${issue.severity}, Reported by ${issue.votes} citizens. Under 150 words, professional tone.` }] }]
+          contents: [{ parts: [{ text: `Today's date is ${new Date().toLocaleDateString('en-IN', {day:'numeric', month:'long', year:'numeric'})}. Write a formal complaint letter to the Municipal Corporation about: Category: ${issue.category}, Location: ${issue.location}, Issue: ${issue.summary}, Severity: ${issue.severity}, Reported by ${issue.votes} citizens. The complainant's name is ${userName}. Use their actual name and today's date. Address it to "The Municipal Commissioner, Municipal Corporation" without any city placeholders or brackets. Remove ALL placeholder text in square brackets. Under 150 words, professional tone.` }] }]
         }),
       }
     );
@@ -142,6 +144,29 @@ function App() {
 
   return (
     <div className="min-h-screen bg-gray-950 text-white">
+      {/* Name Modal */}
+      {showNameModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-90 z-[9999] flex items-center justify-center p-4">
+          <div className="bg-gray-900 rounded-2xl p-6 w-full max-w-sm border border-orange-800">
+            <div className="text-4xl mb-3 text-center">🛠️</div>
+            <h2 className="text-xl font-bold text-center mb-1">Welcome to FixIt</h2>
+            <p className="text-gray-400 text-sm text-center mb-6">Your name will appear on complaint letters sent to authorities</p>
+            <input
+              type="text"
+              placeholder="Enter your name"
+              value={userName}
+              onChange={(e) => setUserName(e.target.value)}
+              className="w-full bg-gray-800 rounded-xl p-4 mb-4 text-white placeholder-gray-500 border border-gray-700 focus:border-orange-500 focus:outline-none"
+            />
+            <button
+              onClick={() => { if(userName.trim()) setShowNameModal(false); }}
+              className="w-full bg-orange-500 hover:bg-orange-600 rounded-xl p-4 font-bold transition-colors"
+            >
+              Get Started →
+            </button>
+          </div>
+        </div>
+      )}
       {/* Header */}
       <div className="bg-gray-900 border-b border-orange-900 px-6 py-4 flex items-center justify-between sticky top-0 z-50">
         <div className="flex items-center gap-3">
