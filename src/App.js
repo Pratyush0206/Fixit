@@ -25,6 +25,19 @@ function App() {
   const [issues, setIssues] = useState([]);
   const [aiResult, setAiResult] = useState(null);
 
+  const getLocation = () => {
+    return new Promise((resolve) => {
+      if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+          (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+          () => resolve({ lat: 20.5937, lng: 78.9629 }) // default India center
+        );
+      } else {
+        resolve({ lat: 20.5937, lng: 78.9629 });
+      }
+    });
+  };
+
   const handleImageChange = (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -63,6 +76,7 @@ function App() {
     try {
       const result = await analyzeWithGemini();
       setAiResult(result);
+      const coords = await getLocation();
       await addDoc(collection(db, "issues"), {
         location,
         description,
@@ -71,6 +85,8 @@ function App() {
         summary: result.summary,
         votes: 0,
         status: "Reported",
+        lat: coords.lat,
+        lng: coords.lng,
         timestamp: serverTimestamp(),
       });
       alert("Issue reported successfully!");
@@ -159,7 +175,7 @@ const generateEscalationLetter = async (issue) => {
       {/* Map */}
       <div className="max-w-2xl mx-auto px-4 mb-6">
         <div className="rounded-xl overflow-hidden border border-gray-800" style={{height: '300px'}}>
-          <MapContainer center={[20.5937, 78.9629]} zoom={5} style={{height: '100%', width: '100%'}}>
+          <MapContainer center={[12.8399, 77.6770]} zoom={20} style={{height: '100%', width: '100%'}}>
             <TileLayer
               url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
               attribution='&copy; OpenStreetMap contributors'
