@@ -3,7 +3,7 @@ import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import { useState, useEffect, useRef } from "react";
 import { db } from "./firebase";
-import { collection, addDoc, getDocs, serverTimestamp, doc, updateDoc, increment, setDoc, getDoc } from "firebase/firestore";
+import { collection, addDoc, getDocs, serverTimestamp, doc, updateDoc, increment, setDoc, getDoc, arrayUnion } from "firebase/firestore";
 
 delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
@@ -113,7 +113,7 @@ function App() {
       await addDoc(collection(db, "issues"), {
         location, description,
         category: result.category, severity: result.severity, summary: result.summary,
-        votes: 0, status: "Reported",
+        votes: 0, verifiedBy: [], reportedBy: userName, status: "Reported",
         lat: coords.lat, lng: coords.lng,
         timestamp: serverTimestamp(),
       });
@@ -185,12 +185,30 @@ function App() {
   };
 
   const handleUpvote = async (issueId) => {
+    const issue = issues.find(i => i.id === issueId);
+
+    if (!issue) return;
+
+    const verifiedBy = issue.verifiedBy || [];
+
+    if (verifiedBy.includes(userName)) {
+      alert("You have already verified this issue.");
+      return;
+    }
+
     const issueRef = doc(db, "issues", issueId);
-    await updateDoc(issueRef, { votes: increment(1) });
+
+    await updateDoc(issueRef, {
+      votes: increment(1),
+      verifiedBy: arrayUnion(userName),
+    });
+
     const snapshot = await getDocs(collection(db, "issues"));
     const updated = snapshot.docs.find(d => d.id === issueId);
     const updatedIssue = { id: updated.id, ...updated.data() };
+
     await checkEscalation(issueId, updatedIssue.votes, updatedIssue);
+
     loadIssues();
   };
 
