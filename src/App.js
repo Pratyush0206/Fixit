@@ -3,7 +3,7 @@ import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import { useState, useEffect, useRef } from "react";
 import { db } from "./firebase";
-import { collection, addDoc, getDocs, serverTimestamp, doc, updateDoc, increment } from "firebase/firestore";
+import { collection, addDoc, getDocs, serverTimestamp, doc, updateDoc, increment, setDoc, getDoc } from "firebase/firestore";
 
 delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
@@ -26,9 +26,11 @@ function App() {
   const [showNameModal, setShowNameModal] = useState(true);
   const [duplicateIssue, setDuplicateIssue] = useState(null);
   const [pendingCoords, setPendingCoords] = useState(null);
+  const [insights, setInsights] = useState(null);
+  const [insightsLoading, setInsightsLoading] = useState(false);
   const fileRef = useRef();
 
-  useEffect(() => { loadIssues(); }, []);
+  useEffect(() => { loadIssues(); loadInsights(); }, []);
 
   const getLocation = () => new Promise((resolve) => {
     navigator.geolocation
@@ -149,6 +151,37 @@ function App() {
   const loadIssues = async () => {
     const snapshot = await getDocs(collection(db, "issues"));
     setIssues(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+  };
+
+  const loadInsights = async () => {
+    const snap = await getDoc(doc(db, "meta", "insights"));
+    if (snap.exists()) setInsights(snap.data());
+  };
+
+  const generateInsights = async () => {
+    setInsightsLoading(true);
+    try {
+      const issueData = issues.map(i => ({
+        category: i.category, location: i.location, severity: i.severity,
+        status: i.status, votes: i.votes
+      }));
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.REACT_APP_GEMINI_API_KEY}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: `Analyze these civic issues: ${JSON.stringify(issueData)}. Return ONLY raw JSON: {"hotspots": "1-2 sentences on repeated-location areas", "trends": "1-2 sentences on category patterns", "priority": "1-2 sentences on which open issues need attention first", "department": "1-2 sentences mapping categories to responsible departments", "riskAlert": "1-2 sentences on any escalation risk, or 'No immediate risks detected' if none"}. No markdown, just raw JSON.` }] }]
+          }),
+        }
+      );
+      const data = await response.json();
+      const text = data.candidates[0].content.parts[0].text;
+      const result = JSON.parse(text.replace(/```json|```/g, "").trim());
+      await setDoc(doc(db, "meta", "insights"), { ...result, generatedAt: serverTimestamp() });
+      setInsights(result);
+    } catch (err) { alert("Insights error: " + err.message); }
+    setInsightsLoading(false);
   };
 
   const handleUpvote = async (issueId) => {
@@ -272,13 +305,13 @@ function App() {
 
       {/* Tabs */}
       <div className="flex border-b border-gray-800 bg-gray-900 sticky top-16 z-40">
-        {["report", "feed"].map(tab => (
+        {["report", "feed", "insights"].map(tab => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
             className={`flex-1 py-3 text-sm font-semibold capitalize transition-colors ${activeTab === tab ? "text-orange-400 border-b-2 border-orange-400" : "text-gray-500 hover:text-gray-300"}`}
           >
-            {tab === "report" ? "📸 Report Issue" : `📋 Issues Feed (${issues.length})`}
+            {tab === "report" ? "📸 Report Issue" : tab === "feed" ? `📋 Issues Feed (${issues.length})` : "🤖 AI Insights"}
           </button>
         ))}
       </div>
@@ -397,7 +430,50 @@ function App() {
             )}
           </div>
         )}
+
+        {/* AI Insights Tab */}
+        {activeTab === "insights" && (
+          <div>
+            <button
+              onClick={generateInsights}
+              disabled={insightsLoading}
+              className="w-full bg-orange-500 hover:bg-orange-600 rounded-xl p-4 font-bold mb-4 disabled:opacity-40"
+            >
+              {insightsLoading ? "🤖 Analyzing..." : "🔄 Refresh Insights"}
+            </button>
+
+            {!insights && !insightsLoading && (
+              <p className="text-gray-500 text-center py-8">No insights generated yet. Tap refresh above.</p>
+            )}
+
+            {insights && (
+              <div className="space-y-3">
+                <div className="bg-gray-900 rounded-xl p-4 border border-gray-800">
+                  <p className="text-orange-400 font-semibold mb-1">📍 Hotspots</p>
+                  <p className="text-gray-300 text-sm">{insights.hotspots}</p>
+                </div>
+                <div className="bg-gray-900 rounded-xl p-4 border border-gray-800">
+                  <p className="text-orange-400 font-semibold mb-1">📈 Trends</p>
+                  <p className="text-gray-300 text-sm">{insights.trends}</p>
+                </div>
+                <div className="bg-gray-900 rounded-xl p-4 border border-gray-800">
+                  <p className="text-orange-400 font-semibold mb-1">⚡ Priority</p>
+                  <p className="text-gray-300 text-sm">{insights.priority}</p>
+                </div>
+                <div className="bg-gray-900 rounded-xl p-4 border border-gray-800">
+                  <p className="text-orange-400 font-semibold mb-1">🏢 Department</p>
+                  <p className="text-gray-300 text-sm">{insights.department}</p>
+                </div>
+                <div className="bg-gray-900 rounded-xl p-4 border border-gray-800">
+                  <p className="text-orange-400 font-semibold mb-1">🚨 Risk Alert</p>
+                  <p className="text-gray-300 text-sm">{insights.riskAlert}</p>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
+
       {/* Duplicate Detection Modal */}
       {duplicateIssue && (
         <div className="fixed inset-0 bg-black bg-opacity-90 z-[9999] flex items-center justify-center p-4">
