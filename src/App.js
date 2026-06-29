@@ -28,9 +28,10 @@ function App() {
   const [pendingCoords, setPendingCoords] = useState(null);
   const [insights, setInsights] = useState(null);
   const [insightsLoading, setInsightsLoading] = useState(false);
+  const [leaderboard, setLeaderboard] = useState([]);
   const fileRef = useRef();
 
-  useEffect(() => { loadIssues(); loadInsights(); }, []);
+  useEffect(() => { loadIssues(); loadInsights(); loadLeaderboard();}, []);
 
   const getLocation = () => new Promise((resolve) => {
     navigator.geolocation
@@ -72,7 +73,7 @@ function App() {
 
   const analyzeWithGemini = async () => {
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.REACT_APP_GEMINI_API_KEY}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${process.env.REACT_APP_GEMINI_API_KEY}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -90,6 +91,26 @@ function App() {
     return JSON.parse(text.replace(/```json|```/g, "").trim());
   };
 
+  const updateUserStats = async (name, type) => {
+    const userRef = doc(db, "users", name);
+    const snap = await getDoc(userRef);
+
+    if (!snap.exists()) {
+      await setDoc(userRef, {
+        name,
+        reports: type === "report" ? 1 : 0,
+        verifications: type === "verification" ? 1 : 0,
+        points: type === "report" ? 10 : 5,
+      });
+    } else {
+      await updateDoc(userRef, {
+        reports: increment(type === "report" ? 1 : 0),
+        verifications: increment(type === "verification" ? 1 : 0),
+        points: increment(type === "report" ? 10 : 5),
+      });
+    }
+  };
+
   const handleSubmit = async () => {
     if (!imageBase64 || !location) return alert("Please add image and location");
     setLoading(true);
@@ -103,7 +124,14 @@ function App() {
       const coords = await getLocation();
 
       const dup = findDuplicate(result.category, coords.lat, coords.lng);
+
       if (dup) {
+        if (dup.status === "Escalated") {
+          alert("📨 A similar issue has already been escalated to the authorities.");
+          setLoading(false);
+          return;
+        }
+
         setDuplicateIssue(dup);
         setPendingCoords(coords);
         setLoading(false);
@@ -114,9 +142,11 @@ function App() {
         location, description,
         category: result.category, severity: result.severity, summary: result.summary,
         votes: 0, verifiedBy: [], reportedBy: userName, status: "Reported",
-        lat: coords.lat, lng: coords.lng,
+        lat: coords.lat +(Math.random() - 0.5) * 0.01, lng: coords.lng + (Math.random() - 0.5) * 0.01,
         timestamp: serverTimestamp(),
       });
+      await updateUserStats(userName, "report");
+      loadLeaderboard();
       alert("Issue reported successfully!");
       setLocation(""); setDescription(""); setImage(null); setImageBase64(null); setImagePreview(null);
       loadIssues();
@@ -137,10 +167,12 @@ function App() {
     await addDoc(collection(db, "issues"), {
       location, description,
       category: aiResult.category, severity: aiResult.severity, summary: aiResult.summary,
-      votes: 0, status: "Reported",
+      votes: 0, verifiedBy: [], reportedBy: userName, status: "Reported",
       lat: pendingCoords.lat, lng: pendingCoords.lng,
       timestamp: serverTimestamp(),
     });
+    await updateUserStats(userName, "report");
+    loadLeaderboard();
     setDuplicateIssue(null);
     alert("Issue reported successfully!");
     setLocation(""); setDescription(""); setImage(null); setImageBase64(null); setImagePreview(null);
@@ -151,6 +183,23 @@ function App() {
   const loadIssues = async () => {
     const snapshot = await getDocs(collection(db, "issues"));
     setIssues(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+  };
+
+  const loadLeaderboard = async () => {
+    const snapshot = await getDocs(collection(db, "users"));
+
+    const users = snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data(),
+    }));
+
+    users.sort((a, b) => {
+      if (b.points !== a.points) return b.points - a.points;
+      if (b.reports !== a.reports) return b.reports - a.reports;
+      return b.verifications - a.verifications;
+    });
+
+    setLeaderboard(users);
   };
 
   const loadInsights = async () => {
@@ -166,7 +215,7 @@ function App() {
         status: i.status, votes: i.votes
       }));
       const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.REACT_APP_GEMINI_API_KEY}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${process.env.REACT_APP_GEMINI_API_KEY}`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -186,8 +235,13 @@ function App() {
 
   const handleUpvote = async (issueId) => {
     const issue = issues.find(i => i.id === issueId);
-
+    
     if (!issue) return;
+
+    if (issue.reportedBy === userName) {
+      alert("You cannot verify your own reported issue.");
+      return;
+    }
 
     const verifiedBy = issue.verifiedBy || [];
 
@@ -202,7 +256,8 @@ function App() {
       votes: increment(1),
       verifiedBy: arrayUnion(userName),
     });
-
+    await updateUserStats(userName, "verification");
+    loadLeaderboard();
     const snapshot = await getDocs(collection(db, "issues"));
     const updated = snapshot.docs.find(d => d.id === issueId);
     const updatedIssue = { id: updated.id, ...updated.data() };
@@ -214,20 +269,31 @@ function App() {
 
   const checkEscalation = async (issueId, votes, issue) => {
     if (votes >= 3 && issue.status === "Reported") {
+
+      await updateDoc(doc(db, "issues", issueId), {
+        status: "Escalated"
+      });
+
+      loadIssues();
+
       const letter = await generateEscalationLetter(issue);
-      await updateDoc(doc(db, "issues", issueId), { status: "Escalated", escalationLetter: letter });
+
+      await updateDoc(doc(db, "issues", issueId), {
+        escalationLetter: letter
+      });
+
       loadIssues();
     }
   };
 
   const generateEscalationLetter = async (issue) => {
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.REACT_APP_GEMINI_API_KEY}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${process.env.REACT_APP_GEMINI_API_KEY}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          contents: [{ parts: [{ text: `Today's date is ${new Date().toLocaleDateString('en-IN', {day:'numeric', month:'long', year:'numeric'})}. Write a formal complaint letter to the Municipal Corporation about: Category: ${issue.category}, Location: ${issue.location}, Issue: ${issue.summary}, Severity: ${issue.severity}, Reported by ${issue.votes} citizens. The complainant's name is ${userName}. Use their actual name and today's date. Address it to "The Municipal Commissioner, Municipal Corporation" without any city placeholders or brackets. Remove ALL placeholder text in square brackets. Under 150 words, professional tone.` }] }]
+          contents: [{ parts: [{ text: `Today's date is ${new Date().toLocaleDateString('en-IN', {day:'numeric', month:'long', year:'numeric'})}. Write a formal complaint letter to the Municipal Corporation about: Category: ${issue.category}, Location: ${issue.location}, Issue: ${issue.summary}, Severity: ${issue.severity}, Reported and verified by ${issue.votes +1} citizens. The complainant's name is ${issue.reportedBy}. Use their actual name and today's date. Address it to "The Municipal Commissioner, Municipal Corporation" without any city placeholders or brackets. Remove ALL placeholder text in square brackets. Under 150 words, professional tone.` }] }]
         }),
       }
     );
@@ -323,13 +389,13 @@ function App() {
 
       {/* Tabs */}
       <div className="flex border-b border-gray-800 bg-gray-900 sticky top-16 z-40">
-        {["report", "feed", "insights"].map(tab => (
+        {["report", "feed", "insights","leaderboard"].map(tab => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
             className={`flex-1 py-3 text-sm font-semibold capitalize transition-colors ${activeTab === tab ? "text-orange-400 border-b-2 border-orange-400" : "text-gray-500 hover:text-gray-300"}`}
           >
-            {tab === "report" ? "📸 Report Issue" : tab === "feed" ? `📋 Issues Feed (${issues.length})` : "🤖 AI Insights"}
+            {tab === "report" ? "📸 Report Issue" : tab === "feed" ? `📋 Issues Feed (${issues.length})` : tab === "insights" ? "🤖 AI Insights" : "🏆 Leaderboard"}
           </button>
         ))}
       </div>
@@ -422,12 +488,14 @@ function App() {
                   <p className="text-gray-400 text-sm mb-2">📍 {issue.location}</p>
                   <p className="text-gray-300 text-sm mb-3">{issue.summary}</p>
                   <div className="flex gap-2">
-                    <button
-                      onClick={() => handleUpvote(issue.id)}
-                      className="flex-1 text-sm bg-gray-800 hover:bg-gray-700 py-2 rounded-lg font-semibold transition-colors"
-                    >
-                      👍 Verify ({issue.votes})
-                    </button>
+                    {issue.status === "Reported" && (
+                      <button
+                        onClick={() => handleUpvote(issue.id)}
+                        className="flex-1 text-sm bg-gray-800 hover:bg-gray-700 py-2 rounded-lg font-semibold transition-colors"
+                      >
+                        👍 Verify ({issue.votes})
+                      </button>
+                    )}
                     {issue.status !== "Resolved" && (
                       <button
                         onClick={() => handleResolve(issue.id)}
@@ -491,6 +559,72 @@ function App() {
           </div>
         )}
       </div>
+
+      {/* Leaderboard Tab */}
+      {activeTab === "leaderboard" && (
+        <div>
+          <h2 className="text-2xl font-bold mb-4 text-center">
+            🏆 Community Leaderboard
+          </h2>
+
+          {leaderboard.length === 0 ? (
+            <div className="text-center py-16 text-gray-500">
+              No contributors yet.
+            </div>
+          ) : (
+            leaderboard.map((user, index) => (
+              <div
+                key={user.id}
+                className={`rounded-xl p-4 mb-3 transition-all ${
+                          user.name === userName
+                            ? "bg-orange-950 border-2 border-orange-500"
+                            : "bg-gray-900 border border-gray-800"
+                        }`}
+              >
+                <div className="flex justify-between items-center">
+
+                  <div>
+                    <h3 className="text-lg font-bold">
+                      {index === 0
+                        ? "🥇"
+                        : index === 1
+                        ? "🥈"
+                        : index === 2
+                        ? "🥉"
+                        : `#${index + 1}`}{" "}
+                      {user.name}
+
+                      {user.name === userName && (
+                        <span className="ml-2 text-xs bg-orange-500 text-white px-2 py-1 rounded-full">
+                          You
+                        </span>
+                      )}
+                    </h3>
+
+                    <p className="text-gray-400 text-sm">
+                      📋 Reports: {user.reports}
+                    </p>
+
+                    <p className="text-gray-400 text-sm">
+                      👍 Verifications: {user.verifications}
+                    </p>
+                  </div>
+
+                  <div className="text-right">
+                    <p className="text-3xl font-bold text-yellow-400">
+                      {user.points}
+                    </p>
+                    <p className="text-gray-500 text-xs">
+                      Points
+                    </p>
+                  </div>
+
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      )}
 
       {/* Duplicate Detection Modal */}
       {duplicateIssue && (
