@@ -24,6 +24,8 @@ function App() {
   const [activeTab, setActiveTab] = useState("report");
   const [userName, setUserName] = useState("");
   const [showNameModal, setShowNameModal] = useState(true);
+  const [duplicateIssue, setDuplicateIssue] = useState(null);
+  const [pendingCoords, setPendingCoords] = useState(null);
   const fileRef = useRef();
 
   useEffect(() => { loadIssues(); }, []);
@@ -36,6 +38,23 @@ function App() {
         )
       : resolve({ lat: 20.5937, lng: 78.9629 });
   });
+
+  const getDistanceMeters = (lat1, lng1, lat2, lng2) => {
+    const R = 6371000;
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLng = (lng2 - lng1) * Math.PI / 180;
+    const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180) * Math.cos(lat2*Math.PI/180) * Math.sin(dLng/2)**2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  };
+
+  const findDuplicate = (category, lat, lng) => {
+    return issues.find(i =>
+      i.category === category &&
+      i.status !== "Resolved" &&
+      i.lat && i.lng &&
+      getDistanceMeters(lat, lng, i.lat, i.lng) <= 80
+    );
+  };
 
   const handleImageChange = (e) => {
     const file = e.target.files[0];
@@ -69,32 +88,64 @@ function App() {
     return JSON.parse(text.replace(/```json|```/g, "").trim());
   };
 
- const handleSubmit = async () => {
-  if (!imageBase64 || !location) return alert("Please add image and location");
-  setLoading(true);
-  try {
-    const result = await analyzeWithGemini();
-    if (!result.valid) {
-      setLoading(false);
-      return alert("⚠️ Please upload a photo of an actual community issue (pothole, garbage, broken infrastructure, etc.)");
-    }
-    setAiResult(result);
-    const coords = await getLocation();
+  const handleSubmit = async () => {
+    if (!imageBase64 || !location) return alert("Please add image and location");
+    setLoading(true);
+    try {
+      const result = await analyzeWithGemini();
+      if (!result.valid) {
+        setLoading(false);
+        return alert("⚠️ Please upload a photo of an actual community issue (pothole, garbage, broken infrastructure, etc.)");
+      }
+      setAiResult(result);
+      const coords = await getLocation();
+
+      const dup = findDuplicate(result.category, coords.lat, coords.lng);
+      if (dup) {
+        setDuplicateIssue(dup);
+        setPendingCoords(coords);
+        setLoading(false);
+        return;
+      }
+
+      await addDoc(collection(db, "issues"), {
+        location, description,
+        category: result.category, severity: result.severity, summary: result.summary,
+        votes: 0, status: "Reported",
+        lat: coords.lat, lng: coords.lng,
+        timestamp: serverTimestamp(),
+      });
+      alert("Issue reported successfully!");
+      setLocation(""); setDescription(""); setImage(null); setImageBase64(null); setImagePreview(null);
+      loadIssues();
+      setActiveTab("feed");
+    } catch (err) { alert("Error: " + err.message); }
+    setLoading(false);
+  };
+
+  const confirmDuplicateVerify = async () => {
+    await handleUpvote(duplicateIssue.id);
+    setDuplicateIssue(null);
+    setLocation(""); setDescription(""); setImage(null); setImageBase64(null); setImagePreview(null);
+    setActiveTab("feed");
+  };
+
+  const forceCreateNew = async () => {
+    setLoading(true);
     await addDoc(collection(db, "issues"), {
       location, description,
-      category: result.category, severity: result.severity, summary: result.summary,
+      category: aiResult.category, severity: aiResult.severity, summary: aiResult.summary,
       votes: 0, status: "Reported",
-      lat: coords.lat, lng: coords.lng,
+      lat: pendingCoords.lat, lng: pendingCoords.lng,
       timestamp: serverTimestamp(),
     });
+    setDuplicateIssue(null);
     alert("Issue reported successfully!");
     setLocation(""); setDescription(""); setImage(null); setImageBase64(null); setImagePreview(null);
     loadIssues();
     setActiveTab("feed");
-  } catch (err) { alert("Error: " + err.message); }
-  setLoading(false);
-};
-
+    setLoading(false);
+  };
   const loadIssues = async () => {
     const snapshot = await getDocs(collection(db, "issues"));
     setIssues(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
@@ -347,6 +398,26 @@ function App() {
           </div>
         )}
       </div>
+      {/* Duplicate Detection Modal */}
+      {duplicateIssue && (
+        <div className="fixed inset-0 bg-black bg-opacity-90 z-[9999] flex items-center justify-center p-4">
+          <div className="bg-gray-900 rounded-2xl p-6 w-full max-w-sm border border-orange-800">
+            <p className="text-orange-400 font-bold mb-3">⚠️ Similar issue already exists</p>
+            <div className="bg-gray-800 rounded-xl p-4 mb-4">
+              <p className="font-bold">{duplicateIssue.category}</p>
+              <p className="text-gray-400 text-sm mt-1">📍 {duplicateIssue.location}</p>
+              <p className="text-gray-300 text-sm mt-2">{duplicateIssue.summary}</p>
+              <p className="text-orange-300 text-xs mt-2">👍 Verified by {duplicateIssue.votes} citizens</p>
+            </div>
+            <button onClick={confirmDuplicateVerify} className="w-full bg-orange-500 hover:bg-orange-600 rounded-xl p-3 font-bold mb-2">
+              Verify Existing Issue
+            </button>
+            <button onClick={forceCreateNew} className="w-full bg-gray-800 hover:bg-gray-700 rounded-xl p-3 font-semibold text-gray-300">
+              Create New Report Anyway
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
