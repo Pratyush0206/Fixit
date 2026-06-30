@@ -73,7 +73,7 @@ function App() {
 
   const analyzeWithGemini = async () => {
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${process.env.REACT_APP_GEMINI_API_KEY}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.REACT_APP_GEMINI_API_KEY}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -142,7 +142,8 @@ function App() {
         location, description,
         category: result.category, severity: result.severity, summary: result.summary,
         votes: 0, verifiedBy: [], reportedBy: userName, status: "Reported",
-        lat: coords.lat +(Math.random() - 0.5) * 0.01, lng: coords.lng + (Math.random() - 0.5) * 0.01,
+        lat: coords.lat,lng: coords.lng,
+        displayLat: coords.lat +(Math.random() - 0.5) * 0.002, displayLng: coords.lng + (Math.random() - 0.5) * 0.002,
         timestamp: serverTimestamp(),
       });
       await updateUserStats(userName, "report");
@@ -169,6 +170,8 @@ function App() {
       category: aiResult.category, severity: aiResult.severity, summary: aiResult.summary,
       votes: 0, verifiedBy: [], reportedBy: userName, status: "Reported",
       lat: pendingCoords.lat, lng: pendingCoords.lng,
+      displayLat: pendingCoords.lat + (Math.random() - 0.5) * 0.002,
+      displayLng: pendingCoords.lng + (Math.random() - 0.5) * 0.002,
       timestamp: serverTimestamp(),
     });
     await updateUserStats(userName, "report");
@@ -215,7 +218,7 @@ function App() {
         status: i.status, votes: i.votes
       }));
       const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${process.env.REACT_APP_GEMINI_API_KEY}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.REACT_APP_GEMINI_API_KEY}`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -288,7 +291,7 @@ function App() {
 
   const generateEscalationLetter = async (issue) => {
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${process.env.REACT_APP_GEMINI_API_KEY}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.REACT_APP_GEMINI_API_KEY}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -372,7 +375,7 @@ function App() {
           <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
           {issues.map(issue => (
             issue.lat && issue.lng && (
-              <Marker key={issue.id} position={[issue.lat, issue.lng]}>
+              <Marker key={issue.id} position={[issue.displayLat || issue.lat, issue.displayLng || issue.lng]}>
                 <Popup>
                   <div style={{minWidth: '150px'}}>
                     <b>{issue.category}</b><br/>
